@@ -68,14 +68,15 @@ func main() {
 		//log.Println(host.Peerstore().Peers())
 		log.Printf("- Found %d peers in the network: %s\n", len(peers), peers)
 		if PoW() {
-			//Create the block and store it, then send an IHAVE message
+			//Create the block
 			content := strings.Repeat(strconv.FormatInt(int64(math.Pow(float64(time.Now().Unix()), 2)), 16), 16) //Use epoch to create a fake transaction
 			hash := md5.Sum([]byte(content))
 			header := hex.EncodeToString(hash[:])
+			//Store the block and publish it with an IHAVE message
 			topicNetwork.Blocks[header] = content
 			topicNetwork.Headers = append(topicNetwork.Headers, header)
-			log.Printf("Created block with header %s and content %s\n", header, content)
-			topicNetwork.Publish(1, "", "", topicNetwork.Headers, []string{})
+			log.Printf("- Created block with header %s and content %s\n", header, content)
+			topicNetwork.Publish(1, map[string]string{}, topicNetwork.Headers, []string{})
 		}
 		time.Sleep(time.Second * 20) //Wait 20 seconds before computing another message
 	}

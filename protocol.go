@@ -30,10 +30,8 @@ type Message struct {
 	MsgType int //0 data, 1 ihave, 2 iwant
 	Sender  peer.ID
 	Blocks  map[string]string
-	// Header  string
-	// Content string
-	IHAVE []string
-	IWANT []string
+	IHAVE   []string
+	IWANT   []string
 }
 
 func JoinNetwork(ctx context.Context, ps *pubsub.PubSub, self peer.ID) (*TopicNetwork, error) {
@@ -115,7 +113,7 @@ func (net *TopicNetwork) ReadService() {
 			//If I need some blocks, ask for them with an IWANT message
 			if len(iwant) > 0 {
 				fmt.Println(DEBUG, fmt.Sprintf("I want these blocks from %s: %s", message.Sender, iwant))
-				//Send directly to the peer
+				//TODO: Send IWANT message directly to the peer
 			}
 			//Forward the IHAVE message in the network to see if someone else needs blocks listed here
 			net.Messages <- message
@@ -126,11 +124,10 @@ func (net *TopicNetwork) ReadService() {
 			for _, wanted := range message.IWANT {
 				if block, found := net.Blocks[wanted]; found {
 					toSend[wanted] = net.Blocks[block]
-					//Messaggio con i blocchi va inviato diretto o in gossip? Cambio il messaggio con una lista di blocchi per
-					//		poterne inviare di piu` oppure invio un messaggio per ogni blocco richiesto?
 				}
 			}
-			//TODO:Send the message directly to the peer that requested it
+			log.Printf("- I have to send these blocks to %s: %s", message.Sender, toSend)
+			//TODO: Send DATA message directly to the peer that requested it
 		default:
 			log.Fatalf("- Unsupported type of message: %d", message.MsgType)
 		}
