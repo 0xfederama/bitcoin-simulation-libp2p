@@ -28,7 +28,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-const protocolTopicName = "/bitcoin-simulation/1.0"
+const protocolTopicName = "/bitcoin/0.1"
 
 func main() {
 
@@ -65,6 +65,7 @@ func main() {
 	//Advertise location and find other peers
 	routingDiscovery := discovery.NewRoutingDiscovery(kaddht)
 	discovery.Advertise(ctx, routingDiscovery, protocolTopicName)
+	connectedPeers := make([]peer.ID, 128)
 	go func() {
 		for {
 			peerChan, err := routingDiscovery.FindPeers(ctx, protocolTopicName)
@@ -72,20 +73,20 @@ func main() {
 				panic(err)
 			}
 			for p := range peerChan {
-				if p.ID == routedHost.ID() {
+				if p.ID == routedHost.ID() || contains(connectedPeers, p.ID) {
 					continue
 				}
 				if len(p.Addrs) > 0 {
-					routedHost.Peerstore().AddAddrs(p.ID, p.Addrs, peerstore.PermanentAddrTTL)
+					routedHost.Peerstore().AddAddrs(p.ID, p.Addrs, peerstore.ConnectedAddrTTL)
 					err := routedHost.Connect(ctx, p)
 					if err == nil {
 						log.Println("- Connected to", p)
+						connectedPeers = append(connectedPeers, p.ID)
 					} else {
 						log.Printf("- Error connecting to %s: %s\n", p, err)
 					}
 				}
 			}
-			time.Sleep(time.Second * 1)
 		}
 	}()
 
@@ -109,12 +110,19 @@ func main() {
 	signal.Notify(stop, os.Interrupt)
 	go func() {
 		<-stop
-		topicNet.ps.UnregisterTopicValidator(protocolTopicName)
-		topicNet.topic.Close()
 		topicNet.sub.Cancel()
-		host.Close()
-		routedHost.Close()
-		kaddht.Close()
+		err = host.Close()
+		if err != nil {
+			log.Println(DEBUG, err)
+		}
+		err = routedHost.Close()
+		if err != nil {
+			log.Println(DEBUG, err)
+		}
+		err = kaddht.Close()
+		if err != nil {
+			log.Println(DEBUG, err)
+		}
 		fmt.Println("Exiting...")
 		os.Exit(0)
 	}()
@@ -133,12 +141,11 @@ func main() {
 				//Store the block and publish it with an IHAVE message
 				topicNet.Blocks[header] = content
 				topicNet.Headers = append(topicNet.Headers, header)
-				log.Printf("- Created block with header %s and content %s\n", header, content)
+				log.Printf("- Created block with header: %s and content: %s\n", header, content)
 				if err := topicNet.Publish(topicNet.Headers); err != nil {
 					log.Println("- Error publishing IHAVE message on the network:", err)
 				}
 			}
-			time.Sleep(time.Second * 10) //Wait 10 seconds before computing another message
 		}
 	}
 
@@ -190,7 +197,7 @@ func bootstrapConnect(ctx context.Context, h host.Host, peers []peer.AddrInfo) e
 //Periodically send IHAVE messages on the network for newly entered peers
 func periodicSendIHAVE(net *TopicNetwork) {
 	for {
-		time.Sleep(time.Second * 15)
+		time.Sleep(time.Second * 20)
 		peers := net.ps.ListPeers(protocolTopicName)
 		log.Printf("- Found %d other peers in the network: %s\n", len(peers), peers)
 		if err := net.Publish(net.Headers); err != nil {
@@ -201,7 +208,7 @@ func periodicSendIHAVE(net *TopicNetwork) {
 
 //Simulate proof of work with probability of creating the block
 func PoW() bool {
-	time.Sleep(time.Second * 10) //Simulate time used to compute the proof of work
+	time.Sleep(time.Second * 20) //Simulate time used to compute the proof of work
 	r := rand.Intn(10) + 1
 	if r > -1 { //FIXME: >3, testing //70% chance
 		log.Println("- PoW succeeded")
@@ -210,4 +217,14 @@ func PoW() bool {
 		log.Println("- PoW failed")
 		return false
 	}
+}
+
+//Check if a peer id is in the list given
+func contains(list []peer.ID, p peer.ID) bool {
+	for _, pid := range list {
+		if pid == p {
+			return true
+		}
+	}
+	return false
 }

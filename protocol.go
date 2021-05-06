@@ -81,7 +81,7 @@ func (net *TopicNetwork) ReadService() {
 
 		//If I'm the sender, ignore the message
 		if received.ReceivedFrom == net.self {
-			log.Println("- I am the sender, ignoring the packet")
+			//log.Println("- I am the sender, ignoring the packet")
 			continue
 		}
 
@@ -127,6 +127,8 @@ func (net *TopicNetwork) ReadService() {
 
 //Publishes the message on the GossipSub network (used only for IHAVE messages)
 func (net *TopicNetwork) Publish(ihave []string) error {
+
+	//Create and marshal the message
 	message := &Message{
 		MsgType: 1,
 		Sender:  net.self,
@@ -138,14 +140,20 @@ func (net *TopicNetwork) Publish(ihave []string) error {
 	if err != nil {
 		return err
 	}
-	log.Println("- Publishing", string(msg))
-	return net.topic.Publish(net.ctx, msg)
+
+	//Publish the message on the GossipSub network
+	err = net.topic.Publish(net.ctx, msg)
+	if err != nil {
+		return err
+	}
+	log.Println("- Message IHAVE published", string(msg))
+	return nil
+
 }
 
 //Stream handler for DATA and IWANT messages
 func (net *TopicNetwork) handleStream(s network.Stream) {
 
-	log.Println("- Got a new stream")
 	rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
 	//Receive and respond message loop
 	go func(rw *bufio.ReadWriter) {
@@ -180,12 +188,12 @@ func (net *TopicNetwork) handleStream(s network.Stream) {
 						net.Headers = append(net.Headers, header)
 						log.Printf("- Stored block %s: %s\n", header, content)
 					} else {
-						log.Println("- I already have the block", header)
+						log.Println("- I already have the block", header) //This should not happen
 					}
 				}
-				fmt.Println(DEBUG, "Now I have these blocks:", net.Blocks)
+				log.Println("- Now I have these blocks:", net.Blocks)
 
-			case 2: //Send the blocks requested with a DATA message
+			case 2: //Send the requested blocks with a DATA message
 
 				//Create a map of requested block to send to the peer
 				toSend := make(map[string]string)
@@ -206,7 +214,7 @@ func (net *TopicNetwork) handleStream(s network.Stream) {
 				net.directSend(message.Sender, *msg)
 
 			default:
-				log.Printf("- Message type %d received not supported for direct messaging", message.MsgType)
+				fmt.Println(DEBUG, "This was not expected, message type", message.MsgType)
 			}
 		}
 	}(rw)
@@ -236,11 +244,16 @@ func (net *TopicNetwork) directSend(receiver peer.ID, msg Message) {
 		log.Println("- Error sending message on stream:", err)
 		return
 	}
-	log.Printf("- Sent (%d chars) to %s: %s", nWritten, receiver, string(message))
+
+	if msg.MsgType == 0 {
+		log.Printf("- Message DATA sent to %s (%d chars): %s", receiver, nWritten, string(message))
+	} else if msg.MsgType == 2 {
+		log.Printf("- Message IWANT sent to %s: %s", receiver, string(message))
+	}
 
 }
 
-//Print message received
+//Print received message
 func printMessage(msg Message) {
 	switch msg.MsgType {
 	case 0:
