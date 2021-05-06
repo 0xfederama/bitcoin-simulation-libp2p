@@ -28,8 +28,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-//Used by the stream handler
-const protocolName = "/bitcoin-simulation/1.0.0"
+const protocolTopicName = "/bitcoin-simulation/1.0"
 
 func main() {
 
@@ -43,7 +42,6 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	defer host.Close()
 
 	fmt.Printf("ID:    %s\nAddrs: %s\n\n", host.ID(), host.Addrs())
 
@@ -54,10 +52,10 @@ func main() {
 	kaddht := dht.NewDHT(ctx, host, dstore)
 
 	//Make the routed host
-	routedhost := rhost.Wrap(host, kaddht)
+	routedHost := rhost.Wrap(host, kaddht)
 
 	//Bootstrap the DHT
-	if err = bootstrapConnect(ctx, routedhost, dht.GetDefaultBootstrapPeerAddrInfos()); err != nil {
+	if err = bootstrapConnect(ctx, routedHost, dht.GetDefaultBootstrapPeerAddrInfos()); err != nil {
 		panic(err)
 	}
 	if err = kaddht.Bootstrap(ctx); err != nil {
@@ -66,28 +64,37 @@ func main() {
 
 	//Advertise location and find other peers
 	routingDiscovery := discovery.NewRoutingDiscovery(kaddht)
-	discovery.Advertise(ctx, routingDiscovery, protocolName)
+	discovery.Advertise(ctx, routingDiscovery, protocolTopicName)
 	go func() {
 		for {
-			peerChan, err := routingDiscovery.FindPeers(ctx, protocolName)
+			peerChan, err := routingDiscovery.FindPeers(ctx, protocolTopicName)
 			if err != nil {
 				panic(err)
 			}
-			for peer := range peerChan {
-				if len(peer.Addrs) > 0 {
-					fmt.Println(DEBUG, "Found", peer)
+			for p := range peerChan {
+				if p.ID == routedHost.ID() {
+					continue
+				}
+				if len(p.Addrs) > 0 {
+					routedHost.Peerstore().AddAddrs(p.ID, p.Addrs, peerstore.PermanentAddrTTL)
+					err := routedHost.Connect(ctx, p)
+					if err == nil {
+						log.Println("- Connected to", p)
+					} else {
+						log.Printf("- Error connecting to %s: %s\n", p, err)
+					}
 				}
 			}
-			time.Sleep(time.Second*5)
+			time.Sleep(time.Second * 1)
 		}
 	}()
 
 	//Create a new PubSub service using GossipSub routing and join the topic
-	ps, err := pubsub.NewGossipSub(ctx, routedhost)
+	ps, err := pubsub.NewGossipSub(ctx, routedHost)
 	if err != nil {
 		panic(err)
 	}
-	topicNet, err := JoinNetwork(ctx, routedhost, ps, routedhost.ID())
+	topicNet, err := JoinNetwork(ctx, routedHost, ps, routedHost.ID())
 	if err != nil {
 		panic(err)
 	}
@@ -95,27 +102,27 @@ func main() {
 	go periodicSendIHAVE(topicNet)
 
 	//Set stream handler to send and receive direct DATA and IWANT messages using the network struct
-	host.SetStreamHandler(protocolName, topicNet.handleStream)
-	routedhost.SetStreamHandler(protocolName, topicNet.handleStream)
+	routedHost.SetStreamHandler(protocolTopicName, topicNet.handleStream)
 
-	//Wait for stop signal (Ctrl-C) and close the host
+	//Wait for stop signal (Ctrl-C), unsubscribe and close the host
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt)
 	go func() {
 		<-stop
-		// topicNet.ps.UnregisterTopicValidator(topicName)
-		// topicNet.topic.Close()
-		// topicNet.sub.Cancel()
-		// host.Close()
-		// kaddht.Close()
+		topicNet.ps.UnregisterTopicValidator(protocolTopicName)
+		topicNet.topic.Close()
+		topicNet.sub.Cancel()
+		host.Close()
+		routedHost.Close()
+		kaddht.Close()
 		fmt.Println("Exiting...")
 		os.Exit(0)
 	}()
 
 	//Loop to simulate creation of "transactions"
 	if true {
-		for i := 0; i < 2; i++ {
-			peers := topicNet.ps.ListPeers(topicName)
+		for i := 0; i < 1; i++ {
+			peers := topicNet.ps.ListPeers(protocolTopicName)
 			log.Printf("- Found %d other peers in the network: %s\n", len(peers), peers)
 			if PoW() {
 				//Create the block
@@ -132,28 +139,27 @@ func main() {
 				}
 			}
 			time.Sleep(time.Second * 10) //Wait 10 seconds before computing another message
-			fmt.Println()
 		}
 	}
 
-	select {} //FIXME: only for testing peers that do not create blocks
+	select {} //FIXME: only for testing
 
 }
 
 //Bootstrap and connect to the peers
 func bootstrapConnect(ctx context.Context, h host.Host, peers []peer.AddrInfo) error {
-	
+
+	//Asynchronously connect to the bootstrap peers
 	if len(peers) < 1 {
 		return errors.New("not enough bootstrap peers")
 	}
 	errs := make(chan error, len(peers))
 	var wg sync.WaitGroup
 	for _, p := range peers {
-		//peerInfo, _ := peer.AddrInfoFromP2pAddr(peerAddr)
 		wg.Add(1)
 		go func(p peer.AddrInfo) {
 			defer wg.Done()
-			h.Peerstore().AddAddrs(p.ID, p.Addrs, peerstore.PermanentAddrTTL)
+			h.Peerstore().AddAddrs(p.ID, p.Addrs, peerstore.ConnectedAddrTTL)
 			if err := h.Connect(ctx, p); err != nil {
 				log.Printf("- Error connecting to %s:%s\n", p, err)
 				errs <- err
@@ -165,6 +171,7 @@ func bootstrapConnect(ctx context.Context, h host.Host, peers []peer.AddrInfo) e
 	}
 	wg.Wait()
 
+	//Return errors counting the results
 	close(errs)
 	count := 0
 	var err error
@@ -177,13 +184,14 @@ func bootstrapConnect(ctx context.Context, h host.Host, peers []peer.AddrInfo) e
 		return fmt.Errorf("failed to boostrap: %s", err)
 	}
 	return nil
+
 }
 
 //Periodically send IHAVE messages on the network for newly entered peers
 func periodicSendIHAVE(net *TopicNetwork) {
 	for {
-		time.Sleep(time.Second * 15) //FIXME: sleep for 30
-		peers := net.ps.ListPeers(topicName)
+		time.Sleep(time.Second * 15)
+		peers := net.ps.ListPeers(protocolTopicName)
 		log.Printf("- Found %d other peers in the network: %s\n", len(peers), peers)
 		if err := net.Publish(net.Headers); err != nil {
 			log.Println("- Error publishing IHAVE message on the network:", err)
@@ -203,4 +211,3 @@ func PoW() bool {
 		return false
 	}
 }
-

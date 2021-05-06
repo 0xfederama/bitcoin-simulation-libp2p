@@ -15,8 +15,6 @@ import (
 
 const DEBUG = "\033[31m[*][DEBUG]\033[0m"
 
-const topicName = "/bitcoin-simulation/1.0.0"
-
 type TopicNetwork struct {
 	Messages chan *Message
 	Blocks   map[string]string
@@ -42,7 +40,7 @@ type Message struct {
 func JoinNetwork(ctx context.Context, host host.Host, ps *pubsub.PubSub, self peer.ID) (*TopicNetwork, error) {
 
 	//Join the topic
-	topic, err := ps.Join(topicName)
+	topic, err := ps.Join(protocolTopicName)
 	if err != nil {
 		return nil, err
 	}
@@ -219,7 +217,7 @@ func (net *TopicNetwork) handleStream(s network.Stream) {
 func (net *TopicNetwork) directSend(receiver peer.ID, msg Message) {
 
 	//Open the stream to the receiver peer
-	stream, err := net.host.NewStream(net.ctx, receiver, protocolName)
+	stream, err := net.host.NewStream(net.ctx, receiver, protocolTopicName)
 	if err != nil {
 		log.Printf("- Error opening stream to %s: %s\n", receiver, err)
 		return
@@ -242,8 +240,7 @@ func (net *TopicNetwork) directSend(receiver peer.ID, msg Message) {
 
 }
 
-/************ Support Functions ************/
-
+//Print message received
 func printMessage(msg Message) {
 	switch msg.MsgType {
 	case 0:
