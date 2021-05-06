@@ -110,6 +110,8 @@ func main() {
 		}
 	}
 
+	select{} //FIXME: only for testing peers that do not create blocks
+
 }
 
 //Create an mDNS discovery service and attach it to the host
@@ -137,7 +139,7 @@ func (notifee *discoveryNotifee) HandlePeerFound(p peer.AddrInfo) {
 	}
 }
 
-//Periodically send IHAVE messages on the newtork for newly entered peers
+//Periodically send IHAVE messages on the network for newly entered peers
 func periodicSendIHAVE(net *TopicNetwork) {
 	for {
 		time.Sleep(time.Second * 30)
