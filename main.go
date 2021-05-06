@@ -113,7 +113,7 @@ func main() {
 	}()
 
 	//Loop to simulate creation of "transactions"
-	if false {
+	if true {
 		for i := 0; i < 2; i++ {
 			peers := topicNet.ps.ListPeers(topicName)
 			log.Printf("- Found %d other peers in the network: %s\n", len(peers), peers)
