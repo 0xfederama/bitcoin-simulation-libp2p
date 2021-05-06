@@ -12,26 +12,24 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	ds "github.com/ipfs/go-datastore"
+	dsync "github.com/ipfs/go-datastore/sync"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p-core/host"
 	"github.com/libp2p/go-libp2p-core/peer"
+	"github.com/libp2p/go-libp2p-core/peerstore"
+	discovery "github.com/libp2p/go-libp2p-discovery"
+	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
-	"github.com/libp2p/go-libp2p/p2p/discovery"
+	rhost "github.com/libp2p/go-libp2p/p2p/host/routed"
+	"github.com/pkg/errors"
 )
-
-//Used by mDNS ads to discover other peers
-const discoveryServiceTag = "bitcoin-simulation"
 
 //Used by the stream handler
 const protocolName = "/bitcoin-simulation/1.0.0"
-
-//Notified when a new peer is found via mDNS discovery
-type discoveryNotifee struct {
-	host host.Host
-	ctx  context.Context
-}
 
 func main() {
 
@@ -49,29 +47,56 @@ func main() {
 
 	fmt.Printf("ID:    %s\nAddrs: %s\n\n", host.ID(), host.Addrs())
 
-	//Create a new PubSub service using GossipSub routing
-	ps, err := pubsub.NewGossipSub(ctx, host)
+	//Make a datastore used by the DHT
+	dstore := dsync.MutexWrap(ds.NewMapDatastore())
+
+	//Make the DHT
+	kaddht := dht.NewDHT(ctx, host, dstore)
+
+	//Make the routed host
+	routedhost := rhost.Wrap(host, kaddht)
+
+	//Bootstrap the DHT
+	if err = bootstrapConnect(ctx, routedhost, dht.GetDefaultBootstrapPeerAddrInfos()); err != nil {
+		panic(err)
+	}
+	if err = kaddht.Bootstrap(ctx); err != nil {
+		panic(err)
+	}
+
+	//Advertise location and find other peers
+	routingDiscovery := discovery.NewRoutingDiscovery(kaddht)
+	discovery.Advertise(ctx, routingDiscovery, protocolName)
+	go func() {
+		for {
+			peerChan, err := routingDiscovery.FindPeers(ctx, protocolName)
+			if err != nil {
+				panic(err)
+			}
+			for peer := range peerChan {
+				if len(peer.Addrs) > 0 {
+					fmt.Println(DEBUG, "Found", peer)
+				}
+			}
+			time.Sleep(time.Second*5)
+		}
+	}()
+
+	//Create a new PubSub service using GossipSub routing and join the topic
+	ps, err := pubsub.NewGossipSub(ctx, routedhost)
+	if err != nil {
+		panic(err)
+	}
+	topicNet, err := JoinNetwork(ctx, routedhost, ps, routedhost.ID())
 	if err != nil {
 		panic(err)
 	}
 
-	//Setup local mDNS discovery //TODO: change to rendezvous or kad-dht
-	err = setupDiscovery(ctx, host)
-	if err != nil {
-		panic(err)
-	}
-
-	//Join the topic
-	topicNet, err := JoinNetwork(ctx, host, ps, host.ID())
-	if err != nil {
-		panic(err)
-	}
-
-	//Goroutine to periodically send IHAVE messages
 	go periodicSendIHAVE(topicNet)
 
 	//Set stream handler to send and receive direct DATA and IWANT messages using the network struct
 	host.SetStreamHandler(protocolName, topicNet.handleStream)
+	routedhost.SetStreamHandler(protocolName, topicNet.handleStream)
 
 	//Wait for stop signal (Ctrl-C) and close the host
 	stop := make(chan os.Signal, 1)
@@ -82,12 +107,13 @@ func main() {
 		// topicNet.topic.Close()
 		// topicNet.sub.Cancel()
 		// host.Close()
+		// kaddht.Close()
 		fmt.Println("Exiting...")
 		os.Exit(0)
 	}()
 
 	//Loop to simulate creation of "transactions"
-	if true {
+	if false {
 		for i := 0; i < 2; i++ {
 			peers := topicNet.ps.ListPeers(topicName)
 			log.Printf("- Found %d other peers in the network: %s\n", len(peers), peers)
@@ -110,39 +136,55 @@ func main() {
 		}
 	}
 
-	select{} //FIXME: only for testing peers that do not create blocks
+	select {} //FIXME: only for testing peers that do not create blocks
 
 }
 
-//Create an mDNS discovery service and attach it to the host
-func setupDiscovery(ctx context.Context, h host.Host) error {
-	disc, err := discovery.NewMdnsService(ctx, h, time.Minute, discoveryServiceTag)
-	if err != nil {
-		return err
+//Bootstrap and connect to the peers
+func bootstrapConnect(ctx context.Context, h host.Host, peers []peer.AddrInfo) error {
+	
+	if len(peers) < 1 {
+		return errors.New("not enough bootstrap peers")
 	}
-	notifee := discoveryNotifee{host: h, ctx: ctx}
-	disc.RegisterNotifee(&notifee)
-	return err
-}
+	errs := make(chan error, len(peers))
+	var wg sync.WaitGroup
+	for _, p := range peers {
+		//peerInfo, _ := peer.AddrInfoFromP2pAddr(peerAddr)
+		wg.Add(1)
+		go func(p peer.AddrInfo) {
+			defer wg.Done()
+			h.Peerstore().AddAddrs(p.ID, p.Addrs, peerstore.PermanentAddrTTL)
+			if err := h.Connect(ctx, p); err != nil {
+				log.Printf("- Error connecting to %s:%s\n", p, err)
+				errs <- err
+				return
+			} else {
+				log.Println("- Connected to", p)
+			}
+		}(p)
+	}
+	wg.Wait()
 
-//Connect to the newly discovered peer
-func (notifee *discoveryNotifee) HandlePeerFound(p peer.AddrInfo) {
-	// if contains(notifee.h.Peerstore().Peers(), p.ID.Pretty()) { //Avoid saving, connecting to and printing the same peer twice
-	// 	return //FIXME: non funziona perche' comunque scopre e si connette spesso due volte insieme
-	// }
-	log.Println("- Discovered peer", p.ID)
-	err := notifee.host.Connect(notifee.ctx, p)
-	if err != nil {
-		log.Printf("- Error connecting to %s: %s", p.ID, err)
-	} else {
-		log.Println("- Connected to", p.ID)
+	close(errs)
+	count := 0
+	var err error
+	for err = range errs {
+		if err != nil {
+			count++
+		}
 	}
+	if count == len(peers) {
+		return fmt.Errorf("failed to boostrap: %s", err)
+	}
+	return nil
 }
 
 //Periodically send IHAVE messages on the network for newly entered peers
 func periodicSendIHAVE(net *TopicNetwork) {
 	for {
-		time.Sleep(time.Second * 30)
+		time.Sleep(time.Second * 15) //FIXME: sleep for 30
+		peers := net.ps.ListPeers(topicName)
+		log.Printf("- Found %d other peers in the network: %s\n", len(peers), peers)
 		if err := net.Publish(net.Headers); err != nil {
 			log.Println("- Error publishing IHAVE message on the network:", err)
 		}
@@ -162,11 +204,3 @@ func PoW() bool {
 	}
 }
 
-// func contains(addrs peer.IDSlice, p string) bool {
-// 	for _, addr := range addrs {
-// 		if addr.Pretty() == p {
-// 			return true
-// 		}
-// 	}
-// 	return false
-// }
