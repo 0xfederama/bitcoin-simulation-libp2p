@@ -36,8 +36,7 @@ func main() {
 	ctx := context.Background()
 	host, err := libp2p.New(
 		ctx,
-		libp2p.Defaults, ///ip4/0.0.0.0/tcp/0, /ip6/::/tcp/0, enable relay, /yamux/1.0.0, /mplex/6.7.0, tls, noise, tcp, ws, empty peerstore
-		//libp2p.EnableAutoRelay(), //TODO: enable nat relay
+		libp2p.Defaults, // /ip4/0.0.0.0/tcp/0, /ip6/::/tcp/0, enable relay, /yamux/1.0.0, /mplex/6.7.0, tls, noise, tcp, ws, empty peerstore
 	)
 	if err != nil {
 		panic(err)
