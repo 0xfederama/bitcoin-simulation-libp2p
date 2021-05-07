@@ -28,7 +28,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-const protocolTopicName = "/bitcoin-simulation/0.1"
+const protocolTopicName = "/bitcoin-simulation/0.0.1"
 
 func main() {
 
