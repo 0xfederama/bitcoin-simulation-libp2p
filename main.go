@@ -28,7 +28,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-const protocolTopicName = "/bitcoin/0.1"
+const protocolTopicName = "/bitcoin-simulation/0.1"
 
 func main() {
 
@@ -200,8 +200,10 @@ func periodicSendIHAVE(net *TopicNetwork) {
 		time.Sleep(time.Second * 20)
 		peers := net.ps.ListPeers(protocolTopicName)
 		log.Printf("- Found %d other peers in the network: %s\n", len(peers), peers)
-		if err := net.Publish(net.Headers); err != nil {
+		if len(net.Headers) > 0 {
+			if err := net.Publish(net.Headers); err != nil {
 			log.Println("- Error publishing IHAVE message on the network:", err)
+			}
 		}
 	}
 }
