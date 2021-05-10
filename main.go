@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/hex"
+	"flag"
 	"fmt"
 	"log"
 	"math"
@@ -31,6 +32,10 @@ import (
 const protocolTopicName = "/bitcoin-simulation/0.0.1"
 
 func main() {
+
+	//Parse input flags for the number of blocks created
+	numBlocks := flag.Int("blocks", 1, "number of blocks to create")
+	flag.Parse()
 
 	//Create the host
 	ctx := context.Background()
@@ -127,24 +132,24 @@ func main() {
 	}()
 
 	//Loop to simulate creation of "transactions"
-	if true {
-		for i := 0; i < 1; i++ {
-			peers := topicNet.ps.ListPeers(protocolTopicName)
-			log.Printf("- Found %d other peers in the network: %s\n", len(peers), peers)
-			if PoW() {
-				//Create the block
-				content := strings.Repeat(strconv.FormatInt(int64(math.Pow(float64(time.Now().Unix()), 2)), 16), 8) //Use epoch to create a fake transaction
-				hash := md5.Sum([]byte(content))
-				header := hex.EncodeToString(hash[:])
+	for i := 0; i < *numBlocks; i++ {
+		peers := topicNet.ps.ListPeers(protocolTopicName)
+		log.Printf("- Found %d other peers in the network: %s\n", len(peers), peers)
+		if PoW() {
+			//Create the block
+			content := strings.Repeat(strconv.FormatInt(int64(math.Pow(float64(time.Now().Unix()), 2)), 16), 8) //Use epoch to create a fake transaction
+			hash := md5.Sum([]byte(content))
+			header := hex.EncodeToString(hash[:])
 
-				//Store the block and publish it with an IHAVE message
-				topicNet.Blocks[header] = content
-				topicNet.Headers = append(topicNet.Headers, header)
-				log.Printf("- Created block with header: %s and content: %s\n", header, content)
-				if err := topicNet.Publish(topicNet.Headers); err != nil {
-					log.Println("- Error publishing IHAVE message on the network:", err)
-				}
+			//Store the block and publish it with an IHAVE message
+			topicNet.Blocks[header] = content
+			topicNet.Headers = append(topicNet.Headers, header)
+			log.Printf("- Created block with header: %s and content: %s\n", header, content)
+			if err := topicNet.Publish(topicNet.Headers); err != nil {
+				log.Println("- Error publishing IHAVE message on the network:", err)
 			}
+		} else { //If the PoW didn't succeed, retry
+			i--
 		}
 	}
 
@@ -211,7 +216,7 @@ func periodicSendIHAVE(net *TopicNetwork) {
 func PoW() bool {
 	time.Sleep(time.Second * 20) //Simulate time used to compute the proof of work
 	r := rand.Intn(10) + 1
-	if r > -1 { //FIXME: >3, testing //70% chance
+	if r > 3 { //70% chance
 		log.Println("- PoW succeeded")
 		return true
 	} else {
