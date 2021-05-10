@@ -29,7 +29,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-const protocolTopicName = "/bitcoin-simulation/0.0.1"
+const protocolTopicName = "/bitcoin-simulation/1.0"
 
 func main() {
 
@@ -42,6 +42,8 @@ func main() {
 	host, err := libp2p.New(
 		ctx,
 		libp2p.Defaults, // /ip4/0.0.0.0/tcp/0, /ip6/::/tcp/0, enable relay, /yamux/1.0.0, /mplex/6.7.0, tls, noise, tcp, ws, empty peerstore
+		libp2p.DefaultStaticRelays(),
+		libp2p.EnableAutoRelay(),
 	)
 	if err != nil {
 		panic(err)
@@ -137,7 +139,7 @@ func main() {
 		log.Printf("- Found %d other peers in the network: %s\n", len(peers), peers)
 		if PoW() {
 			//Create the block
-			content := strings.Repeat(strconv.FormatInt(int64(math.Pow(float64(time.Now().Unix()), 2)), 16), 8) //Use epoch to create a fake transaction
+			content := strings.Repeat(strconv.FormatInt(int64(math.Pow(float64(time.Now().Unix()+rand.Int63n(50)), 2)), 16), 8) //Use epoch to create a fake transaction
 			hash := md5.Sum([]byte(content))
 			header := hex.EncodeToString(hash[:])
 
@@ -206,7 +208,7 @@ func periodicSendIHAVE(net *TopicNetwork) {
 		log.Printf("- Found %d other peers in the network: %s\n", len(peers), peers)
 		if len(net.Headers) > 0 {
 			if err := net.Publish(net.Headers); err != nil {
-			log.Println("- Error publishing IHAVE message on the network:", err)
+				log.Println("- Error publishing IHAVE message on the network:", err)
 			}
 		}
 	}
@@ -216,7 +218,7 @@ func periodicSendIHAVE(net *TopicNetwork) {
 func PoW() bool {
 	time.Sleep(time.Second * 20) //Simulate time used to compute the proof of work
 	r := rand.Intn(10) + 1
-	if r > 3 { //70% chance
+	if r > 3 { //70% chance of success
 		log.Println("- PoW succeeded")
 		return true
 	} else {
