@@ -81,7 +81,7 @@ func (net *TopicNetwork) ReadService() {
 
 		//If I'm the sender, ignore the message
 		if received.ReceivedFrom == net.self {
-			//log.Println("- I am the sender, ignoring the packet")
+			log.Println("- I am the sender, ignoring the packet")
 			continue
 		}
 

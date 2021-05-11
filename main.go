@@ -155,7 +155,7 @@ func main() {
 		}
 	}
 
-	select {} //FIXME: only for testing
+	select {} //Wait forever when finished to create blocks
 
 }
 
