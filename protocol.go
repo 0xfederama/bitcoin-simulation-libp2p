@@ -58,9 +58,9 @@ func JoinNetwork(ctx context.Context, host host.Host, ps *pubsub.PubSub, self pe
 		topic:    topic,
 		sub:      sub,
 		self:     self,
-		Messages: make(chan *Message, 64),
+		Messages: make(chan *Message, 1024),
 		Blocks:   make(map[string]string),
-		Headers:  make([]string, 0, 128),
+		Headers:  make([]string, 0),
 	}
 
 	go net.ReadService()
@@ -96,10 +96,14 @@ func (net *TopicNetwork) ReadService() {
 
 		//Handle the IHAVE message (IWANT and DATA are send directly, so GossipSub should not see them)
 		if message.MsgType == 1 {
-			iwant := make([]string, 0, 16)
+			iwant := make([]string, 0)
 			for _, owned := range message.IHAVE {
 				if _, found := net.Blocks[owned]; !found {
 					iwant = append(iwant, owned)
+				}
+				//Set maximum request to 16 blocks
+				if len(iwant) == 16 {
+					break
 				}
 			}
 			//If I need some blocks, ask for them with a direct IWANT message
@@ -146,7 +150,7 @@ func (net *TopicNetwork) Publish(ihave []string) error {
 	if err != nil {
 		return err
 	}
-	log.Println("- Message IHAVE published", string(msg))
+	log.Printf("- Message IHAVE published (%d chars): %s\n", len(msg), string(msg))
 	return nil
 
 }
@@ -155,12 +159,13 @@ func (net *TopicNetwork) Publish(ihave []string) error {
 func (net *TopicNetwork) handleStream(s network.Stream) {
 
 	rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
+
 	//Receive and respond message loop
 	go func(rw *bufio.ReadWriter) {
 		for {
 
 			//Get the message
-			read := make([]byte, 1024)
+			read := make([]byte, 3072) //A peer can ask for 16 blocks, so the biggest a message can be is a little less than 3072 (2760 precisely)
 			nRead, err := rw.Read(read)
 			read = read[:nRead]
 			if err != nil {

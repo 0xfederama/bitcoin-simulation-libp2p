@@ -3,6 +3,7 @@ module github.com/0xfederama/bitcoin-simulation-libp2p
 go 1.16
 
 require (
+	github.com/ip2location/ip2location-go v8.3.0+incompatible
 	github.com/ipfs/go-datastore v0.4.5
 	github.com/libp2p/go-libp2p v0.13.0
 	github.com/libp2p/go-libp2p-core v0.8.5

@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ip2location/ip2location-go"
 	ds "github.com/ipfs/go-datastore"
 	dsync "github.com/ipfs/go-datastore/sync"
 	"github.com/libp2p/go-libp2p"
@@ -33,7 +34,8 @@ const protocolTopicName = "/bitcoin-simulation/1.0"
 
 func main() {
 
-	//Parse input flags for the number of blocks created
+	//Set logger to print microseconds and parse input flags
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	numBlocks := flag.Int("blocks", 1, "number of blocks to create")
 	flag.Parse()
 
@@ -68,10 +70,11 @@ func main() {
 		panic(err)
 	}
 
-	//Advertise location and find other peers
+	//Advertise location
 	routingDiscovery := discovery.NewRoutingDiscovery(kaddht)
 	discovery.Advertise(ctx, routingDiscovery, protocolTopicName)
 	connectedPeers := make([]peer.ID, 128)
+	//Find peers in loop and store them in the peerstore
 	go func() {
 		for {
 			peerChan, err := routingDiscovery.FindPeers(ctx, protocolTopicName)
@@ -79,9 +82,10 @@ func main() {
 				panic(err)
 			}
 			for p := range peerChan {
-				if p.ID == routedHost.ID() || contains(connectedPeers, p.ID) {
+				if p.ID == routedHost.ID() || containsID(connectedPeers, p.ID) {
 					continue
 				}
+				//Store addresses in the peerstore and connect to the peer found
 				if len(p.Addrs) > 0 {
 					routedHost.Peerstore().AddAddrs(p.ID, p.Addrs, peerstore.ConnectedAddrTTL)
 					err := routedHost.Connect(ctx, p)
@@ -106,6 +110,8 @@ func main() {
 		panic(err)
 	}
 
+	//Periodically send IHAVE messages on the network and locate IPs in the routing table
+	go locateIPAddr(kaddht, routedHost)
 	go periodicSendIHAVE(topicNet)
 
 	//Set stream handler to send and receive direct DATA and IWANT messages using the network struct
@@ -203,7 +209,7 @@ func bootstrapConnect(ctx context.Context, h host.Host, peers []peer.AddrInfo) e
 //Periodically send IHAVE messages on the network for newly entered peers
 func periodicSendIHAVE(net *TopicNetwork) {
 	for {
-		time.Sleep(time.Second * 20)
+		time.Sleep(time.Second * 15)
 		peers := net.ps.ListPeers(protocolTopicName)
 		log.Printf("- Found %d other peers in the network: %s\n", len(peers), peers)
 		if len(net.Headers) > 0 {
@@ -216,7 +222,7 @@ func periodicSendIHAVE(net *TopicNetwork) {
 
 //Simulate proof of work with probability of creating the block
 func PoW() bool {
-	time.Sleep(time.Second * 20) //Simulate time used to compute the proof of work
+	time.Sleep(time.Second * 30) //Simulate time used to compute the proof of work
 	r := rand.Intn(10) + 1
 	if r > 3 { //70% chance of success
 		log.Println("- PoW succeeded")
@@ -227,8 +233,58 @@ func PoW() bool {
 	}
 }
 
+//Locate ip addresses stored in the peerstore in loop
+func locateIPAddr(kaddht *dht.IpfsDHT, host *rhost.RoutedHost) {
+
+	//Open the ip database
+	db, err := ip2location.OpenDB("./IP2LOCATION-LITE-DB3.BIN")
+	if err != nil {
+		log.Println("- Error opening ip database:", err)
+	}
+	defer db.Close()
+
+	for {
+		//For each peer in the routing table, find its address in the peerstore and locate it
+		for _, p := range kaddht.RoutingTable().ListPeers() {
+			listip := make([]string, 0)
+			//Analyze every address of the peer found
+			for _, addr := range host.Peerstore().PeerInfo(p).Addrs {
+				//Locate only new ip4 addresses
+				if addr.Protocols()[0].Name == "ip4" {
+					ip := strings.Split(addr.String(), "/")[2]
+					//Ignore loopback address
+					if ip != "127.0.0.1" {
+						if !containsIP(listip, ip) {
+							listip = append(listip, ip)
+							res, err := db.Get_all(ip)
+							if err != nil {
+								log.Println("- Error searching for ip:", err)
+							} else {
+								log.Printf("- Found %s in %s, %s, %s\n", ip, res.Country_long, res.Region, res.City)
+							}
+						}
+
+					}
+				}
+			}
+		}
+		time.Sleep(time.Second * 60)
+	}
+
+}
+
+//Check if a string is already in
+func containsIP(list []string, ip string) bool {
+	for _, found := range list {
+		if found == ip {
+			return true
+		}
+	}
+	return false
+}
+
 //Check if a peer id is in the list given
-func contains(list []peer.ID, p peer.ID) bool {
+func containsID(list []peer.ID, p peer.ID) bool {
 	for _, pid := range list {
 		if pid == p {
 			return true
