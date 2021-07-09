@@ -63,6 +63,8 @@ func JoinNetwork(ctx context.Context, host host.Host, ps *pubsub.PubSub, self pe
 		Headers:  make([]string, 0),
 	}
 
+	log.Println("- Network joined successfully, topic:", topic.String())
+
 	go net.ReadService()
 	return net, nil
 
@@ -164,24 +166,18 @@ func (net *TopicNetwork) handleStream(s network.Stream) {
 	go func(rw *bufio.ReadWriter) {
 		for {
 
-			//Get the message
-			read := make([]byte, 3072) //A peer can ask for 16 blocks, so the biggest a message can be is a little less than 3072 (2760 precisely)
-			nRead, err := rw.Read(read)
-			read = read[:nRead]
-			if err != nil {
-				log.Println("- Error reading from the stream:", err)
+			//Get the message and decode it
+			decoder := json.NewDecoder(rw)
+			var message Message
+			decoder.Decode(&message)
+
+			if message.Sender == "" {
+				fmt.Println(DEBUG, "Stream closed")
+				s.Reset()
 				return
 			}
 
-			//Unmarshal the message
-			message := new(Message)
-			err = json.Unmarshal(read, message)
-			if err != nil {
-				log.Println("- Error unmarshalling the received message:", err)
-				return
-			}
-
-			printMessage(*message)
+			printMessage(message)
 
 			//Handle the different messages
 			switch message.MsgType {
@@ -191,12 +187,12 @@ func (net *TopicNetwork) handleStream(s network.Stream) {
 					if _, found := net.Blocks[header]; !found {
 						net.Blocks[header] = content
 						net.Headers = append(net.Headers, header)
-						log.Printf("- Stored block %s: %s\n", header, content)
+						log.Printf("- Stored block #%d %s: %s\n", len(net.Headers), header, content)
 					} else {
 						log.Println("- I already have the block", header) //This should not happen
 					}
 				}
-				log.Println("- Now I have these blocks:", net.Blocks)
+				log.Printf("- Now I have #%d blocks: %s\n", len(net.Headers), net.Blocks)
 
 			case 2: //Send the requested blocks with a DATA message
 

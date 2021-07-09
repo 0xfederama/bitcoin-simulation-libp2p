@@ -10,6 +10,8 @@ import (
 	"math"
 	"math/rand"
 	"os"
+
+	"os/exec"
 	"os/signal"
 	"strconv"
 	"strings"
@@ -30,7 +32,12 @@ import (
 	"github.com/pkg/errors"
 )
 
-const protocolTopicName = "/bitcoin-simulation/1.0"
+const protocolTopicName = "/bitcoin-simulation/1.0.0"
+const timePoW = 1        //FIXME: 30 Time to simulate PoW
+const probPoW = 10       //FIXME: 7 Probability out of 10
+const contentRepeat = 16 //FIXME: 8 Repetitions of content in block, every repetition is 16 chars (128 bytes)
+const periodicIHAVE = 2  //FIXME: 15 Time between two IHAVE messages
+const peerLocate = false //FIXME: true Enable/Disable peer localitazion
 
 func main() {
 
@@ -38,6 +45,8 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	numBlocks := flag.Int("blocks", 1, "number of blocks to create")
 	flag.Parse()
+
+	log.Println("- Protocol started")
 
 	//Create the host
 	ctx := context.Background()
@@ -51,7 +60,7 @@ func main() {
 		panic(err)
 	}
 
-	fmt.Printf("ID:    %s\nAddrs: %s\n\n", host.ID(), host.Addrs())
+	fmt.Printf("\nID:    %s\nAddrs: %s\n\n", host.ID(), host.Addrs())
 
 	//Make a datastore used by the DHT
 	dstore := dsync.MutexWrap(ds.NewMapDatastore())
@@ -85,7 +94,7 @@ func main() {
 				if p.ID == routedHost.ID() || containsID(connectedPeers, p.ID) {
 					continue
 				}
-				//Store addresses in the peerstore and connect to the peer found
+				//Store addresses in the peerstore and connect to (and localize) the peer found
 				if len(p.Addrs) > 0 {
 					routedHost.Peerstore().AddAddrs(p.ID, p.Addrs, peerstore.ConnectedAddrTTL)
 					err := routedHost.Connect(ctx, p)
@@ -122,6 +131,13 @@ func main() {
 	signal.Notify(stop, os.Interrupt)
 	go func() {
 		<-stop
+		for _, conn := range routedHost.Network().Conns() {
+			for _, stream := range conn.GetStreams() {
+				stream.Reset()
+				stream.CloseRead()
+				stream.CloseWrite()
+			}
+		}
 		topicNet.sub.Cancel()
 		err = host.Close()
 		if err != nil {
@@ -145,14 +161,14 @@ func main() {
 		log.Printf("- Found %d other peers in the network: %s\n", len(peers), peers)
 		if PoW() {
 			//Create the block
-			content := strings.Repeat(strconv.FormatInt(int64(math.Pow(float64(time.Now().Unix()+rand.Int63n(50)), 2)), 16), 8) //Use epoch to create a fake transaction
+			content := strings.Repeat(strconv.FormatInt(int64(math.Pow(float64(time.Now().Unix()-rand.Int63n(1000000)), 2)), 16), contentRepeat) //Use epoch to create a fake transaction
 			hash := md5.Sum([]byte(content))
 			header := hex.EncodeToString(hash[:])
 
 			//Store the block and publish it with an IHAVE message
 			topicNet.Blocks[header] = content
 			topicNet.Headers = append(topicNet.Headers, header)
-			log.Printf("- Created block with header: %s and content: %s\n", header, content)
+			log.Printf("- Created block #%d with header: %s and content: %s\n", len(topicNet.Headers), header, content)
 			if err := topicNet.Publish(topicNet.Headers); err != nil {
 				log.Println("- Error publishing IHAVE message on the network:", err)
 			}
@@ -209,7 +225,7 @@ func bootstrapConnect(ctx context.Context, h host.Host, peers []peer.AddrInfo) e
 //Periodically send IHAVE messages on the network for newly entered peers
 func periodicSendIHAVE(net *TopicNetwork) {
 	for {
-		time.Sleep(time.Second * 15)
+		time.Sleep(time.Second * periodicIHAVE)
 		peers := net.ps.ListPeers(protocolTopicName)
 		log.Printf("- Found %d other peers in the network: %s\n", len(peers), peers)
 		if len(net.Headers) > 0 {
@@ -222,9 +238,9 @@ func periodicSendIHAVE(net *TopicNetwork) {
 
 //Simulate proof of work with probability of creating the block
 func PoW() bool {
-	time.Sleep(time.Second * 30) //Simulate time used to compute the proof of work
+	time.Sleep(time.Second * timePoW) //Simulate time used to compute the proof of work
 	r := rand.Intn(10) + 1
-	if r > 3 { //70% chance of success
+	if r <= probPoW {
 		log.Println("- PoW succeeded")
 		return true
 	} else {
@@ -236,10 +252,17 @@ func PoW() bool {
 //Locate ip addresses stored in the peerstore in loop
 func locateIPAddr(kaddht *dht.IpfsDHT, host *rhost.RoutedHost) {
 
+	if !peerLocate {
+		log.Println("- Peer localitazion disabled")
+		return
+	}
+
 	//Open the ip database
 	db, err := ip2location.OpenDB("./IP2LOCATION-LITE-DB3.BIN")
 	if err != nil {
 		log.Println("- Error opening ip database:", err)
+		log.Println("- Skipping peer localization")
+		return
 	}
 	defer db.Close()
 
@@ -260,7 +283,14 @@ func locateIPAddr(kaddht *dht.IpfsDHT, host *rhost.RoutedHost) {
 							if err != nil {
 								log.Println("- Error searching for ip:", err)
 							} else {
-								log.Printf("- Found %s in %s, %s, %s\n", ip, res.Country_long, res.Region, res.City)
+								//If a LAN ip is found, ignore it
+								if res.Country_long != "-" {
+									//Search also for Organization Name and AS (if present)
+									cmd := "whois " + ip + " | awk '/OriginAS:/{$1 = \"\"; AS=$0; next} /OrgName:/{$1 = \"\"; print $0\" -\"AS}'"
+									out, _ := exec.Command("bash", "-c", cmd).CombinedOutput()
+									outTrim := strings.Replace(strings.TrimSpace(string(out)), "\n", " ,", -1)
+									log.Printf("- Found %s in %s, %s, %s by (%s)\n", ip, res.Country_long, res.Region, res.City, outTrim)
+								}
 							}
 						}
 
@@ -268,7 +298,7 @@ func locateIPAddr(kaddht *dht.IpfsDHT, host *rhost.RoutedHost) {
 				}
 			}
 		}
-		time.Sleep(time.Second * 60)
+		time.Sleep(time.Second * 120)
 	}
 
 }

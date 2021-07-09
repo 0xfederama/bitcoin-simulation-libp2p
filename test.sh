@@ -37,12 +37,6 @@ case $yn in
         exit
 esac
 
-# if [[ $yn == '' || $yn == "Y" || $yn == "y" ]]; then
-    
-# elif [[ $yn == "n" ]] 
-    
-# fi
-
 echo -e "\nBuilding code and removing old tests"
 if command -v go &> /dev/null; then
     go build -o protocol
@@ -61,7 +55,7 @@ echo -e "Launching ${numPeer} peers (5 every 3 minutes with ${numMinutes}min tim
 #Launch 5 peers every 3 minutes
 for (( i = 1; i <= ${numPeer}; i++ )); do
 	echo "Running peer #$i"
-	timeout -v --signal=2 ${numMinutes}m ./protocol -blocks ${numBlocks} &> "./outputTests/peer${i}.txt" &
+	timeout -v --signal=2 ${numMinutes}m ./protocol -blocks ${numBlocks} &> "./outputTests/peer${i}.log" &
     sleep 0.5s
     if (( $i == $numPeer )); then
         echo -e "\nFinished"
