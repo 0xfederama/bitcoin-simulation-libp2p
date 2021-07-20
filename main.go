@@ -32,12 +32,12 @@ import (
 	"github.com/pkg/errors"
 )
 
-const protocolTopicName = "/bitcoin-simulation/1.0.0"
-const timePoW = 1        //FIXME: 30 Time to simulate PoW
-const probPoW = 10       //FIXME: 7 Probability out of 10
-const contentRepeat = 16 //FIXME: 8 Repetitions of content in block, every repetition is 16 chars (128 bytes)
-const periodicIHAVE = 2  //FIXME: 15 Time between two IHAVE messages
-const peerLocate = false //FIXME: true Enable/Disable peer localitazion
+const protocolTopicName = "/bitcoin-simulation/1.0.6"
+const timePoW = 30       //Time to simulate PoW
+const probPoW = 7        //Probability out of 10
+const contentRepeat = 8  //Repetitions of content in block, every repetition is 16 chars (128 bytes)
+const periodicIHAVE = 15 //Time between two IHAVE messages
+const peerLocate = true  //Enable/Disable peer localitazion
 
 func main() {
 
@@ -94,7 +94,7 @@ func main() {
 				if p.ID == routedHost.ID() || containsID(connectedPeers, p.ID) {
 					continue
 				}
-				//Store addresses in the peerstore and connect to (and localize) the peer found
+				//Store addresses in the peerstore and connect to the peer found (and localize it)
 				if len(p.Addrs) > 0 {
 					routedHost.Peerstore().AddAddrs(p.ID, p.Addrs, peerstore.ConnectedAddrTTL)
 					err := routedHost.Connect(ctx, p)
@@ -168,7 +168,7 @@ func main() {
 			//Store the block and publish it with an IHAVE message
 			topicNet.Blocks[header] = content
 			topicNet.Headers = append(topicNet.Headers, header)
-			log.Printf("- Created block #%d with header: %s and content: %s\n", len(topicNet.Headers), header, content)
+			log.Printf("- Created block #%d with header: %s and content (x %d): %s\n", len(topicNet.Headers), header, contentRepeat, content[:16])
 			if err := topicNet.Publish(topicNet.Headers); err != nil {
 				log.Println("- Error publishing IHAVE message on the network:", err)
 			}

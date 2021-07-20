@@ -164,15 +164,18 @@ func (net *TopicNetwork) handleStream(s network.Stream) {
 
 	//Receive and respond message loop
 	go func(rw *bufio.ReadWriter) {
+
+		//Create the decoder for the stream
+		decoder := json.NewDecoder(rw)
+		var message Message
+
 		for {
 
 			//Get the message and decode it
-			decoder := json.NewDecoder(rw)
-			var message Message
-			decoder.Decode(&message)
-
-			if message.Sender == "" {
-				fmt.Println(DEBUG, "Stream closed")
+			err := decoder.Decode(&message)
+			
+			if err != nil {
+				log.Println("- Stream closed:", err)
 				s.Reset()
 				return
 			}
@@ -187,12 +190,12 @@ func (net *TopicNetwork) handleStream(s network.Stream) {
 					if _, found := net.Blocks[header]; !found {
 						net.Blocks[header] = content
 						net.Headers = append(net.Headers, header)
-						log.Printf("- Stored block #%d %s: %s\n", len(net.Headers), header, content)
+						log.Printf("- Stored block #%d %s: (x %d) %s\n", len(net.Headers), header, contentRepeat, content[:16])
 					} else {
 						log.Println("- I already have the block", header) //This should not happen
 					}
 				}
-				log.Printf("- Now I have #%d blocks: %s\n", len(net.Headers), net.Blocks)
+				log.Printf("- Now I have #%d blocks: %s\n", len(net.Headers), net.Headers)
 
 			case 2: //Send the requested blocks with a DATA message
 
@@ -247,7 +250,7 @@ func (net *TopicNetwork) directSend(receiver peer.ID, msg Message) {
 	}
 
 	if msg.MsgType == 0 {
-		log.Printf("- Message DATA sent to %s (%d chars): %s", receiver, nWritten, string(message))
+		log.Printf("- Message DATA sent to %s (%d chars) with blocks %s", receiver, nWritten, getKeys(msg.Blocks))
 	} else if msg.MsgType == 2 {
 		log.Printf("- Message IWANT sent to %s: %s", receiver, string(message))
 	}
@@ -258,10 +261,21 @@ func (net *TopicNetwork) directSend(receiver peer.ID, msg Message) {
 func printMessage(msg Message) {
 	switch msg.MsgType {
 	case 0:
-		log.Printf("- Message DATA received from %s, blocks %s", msg.Sender, msg.Blocks)
+		log.Printf("- Message DATA received from %s, blocks %s", msg.Sender, getKeys(msg.Blocks))
 	case 1:
 		log.Printf("- Message IHAVE received from %s, it has %s", msg.Sender, msg.IHAVE)
 	case 2:
 		log.Printf("- Message IWANT received from %s, it wants %s", msg.Sender, msg.IWANT)
 	}
+}
+
+//Get the keys of a map
+func getKeys(m map[string]string) []string {
+	keys := make([]string, len(m))
+	i := 0
+	for k := range m {
+		keys[i] = k
+		i++
+	}
+	return keys
 }
